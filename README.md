@@ -134,3 +134,32 @@ The pipeline logic is identical on both platforms — only the source paths and 
 - **Orchestration** — Databricks Workflows or Fabric Pipelines with retries, SLA alerts, and dependency DAGs.
 - **Data quality framework** — graduate from inline asserts to Delta Live Tables expectations (Databricks) or Great Expectations (portable), with the same rejected-records contract.
 - **Streaming** — Structured Streaming over the same Bronze table for near-real-time Silver materialization.
+
+## Gold Layer
+
+Two business-ready aggregations built by joining `silver_yellow_taxi`
+(fact, ~2.76M rows) with `silver_zone_lookup` (dim, 265 rows) — itself
+ingested through its own Bronze + Silver path:
+
+| Table | Pattern | Purpose |
+|---|---|---|
+| `gold_revenue_by_borough` | Inner broadcast join | Revenue, trip count, avg fare per pickup borough |
+| `gold_top_routes` | Self-join: dim aliased twice | Top 20 pickup→dropoff route pairs by trip count |
+
+**Join strategy:** `silver_zone_lookup` is small (~265 rows / ~12 KB), so
+both joins use Spark's `broadcast` hint — the dim is shipped to every
+executor, eliminating shuffle. Standard optimization for star-schema
+joins where the dim is small.
+
+### Insights surfaced by joining
+
+- Queens has 3.5× Manhattan's average fare ($52.50 vs $14.85) because
+  JFK and LaGuardia are both in Queens — the join with the zone dim
+  surfaced an airport-trip pricing pattern that wasn't visible in
+  Silver alone.
+- 19 of the top 20 routes are intra-Manhattan; #1 and #2 are Upper
+  East Side South ↔ Upper East Side North in both directions —
+  classic commuter pattern.
+- 6,939 trips have `Unknown → Unknown` zone classification — flagged
+  as a data-quality investigation target for the source team.
+  
